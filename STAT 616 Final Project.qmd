@@ -1,0 +1,451 @@
+---
+title: "STAT 616 Final Project"
+author: "Pirro Prifti"
+date: "May 5, 2025"
+editor: visual
+format:
+  pdf:
+    toc: false
+    number-sections: false
+    title-block-style: center
+    title-block: true
+---
+
+## Introduction
+
+Financial instruments, while sometimes seen as arcane, are essential tools for both seeking returns and managing risk. Among them, derivatives play a central role. While the term may remind some of calculus, financial derivatives are assets whose value is derived from an underlying, typically more conventional, asset such as stocks, bonds, or commodities. In fact, nearly every major asset class has an associated suite of derivatives.
+
+One of the most well-known types of derivatives is the option. An option is a contract that gives the buyer the right, but not the obligation, to transact at a predetermined price on or before a predetermined date. This raises four essential features: the type of transaction, the strike price, the expiration date, and the degree of freedom in exercising. A call option gives the holder the right to buy the asset, while a put option gives the right to sell it. The strike price is the fixed price at which the transaction can occur, and the expiry is the final or only date on which this right can be exercised. If the expiry is the only date on which the option can be exercised, it is a European-style option, while if you can exercise it at any time up to the expiry, it is an American-style option.
+
+To clarify, let’s consider a concrete example. Suppose you buy a European put option on Apple stock with a strike price of 100 and an expiry one week from today. Given that the underlying (Apple stock) is currently trading at 100, if the price falls to 90 at the end of the week, you can still sell at 100, a clear gain. If the price instead rises to 110, you would simply let the option expire worthless, as you are not obligated to transact. This highlights the asymmetric payoff: you do not have to compensate the counterparty when the price rises above the strike, while your potential gain depends on how far the stock price falls. The payoff for a put option at maturity is given by:
+
+$$
+max(0, K - S_T)
+$$
+
+where $K$ is the strike price and $S_T$ is the stock price at terminal time T.
+
+Because options grant the right without obligation, and the seller/issuer bears significant downside risk, these contracts come with a premium. This premium reflects the value of the option's flexibility, the probability of it expiring profitable, and the volatility of the underlying asset. Importantly, you are not required to compensate the counterparty if the price moves against you, your option simply expires worthless. This risk asymmetry is a key feature of option pricing.
+
+The example above involves a European option, which can only be exercised at expiry. Its counterpart, the American option, allows the holder to exercise any time before or at expiration. This added flexibility makes American options more challenging to price, as they involve solving an optimal stopping problem. While European options often admit closed-form solutions (e.g., via the Black-Scholes formula), American options typically require numerical methods.
+
+One such method is the Least-Squares Monte Carlo (LSMC) algorithm, introduced by Longstaff and Schwartz. This approach uses simulation and regression to approximate the continuation value of holding an option, a critical step in deciding whether or not to exercise early. In this project, we explore the LSMC methodology in detail, build intuition for how and why it works, and test its accuracy in pricing American put options. The same method can be extended to call options by simply changing the payoff function to:
+
+$$
+max(0, S_T - K)
+$$
+
+## Simulation: Geometric Brownian Motion
+
+This begs the question: what are we simulating in an options pricing model? The key random variable is the behavior of the underlying stock price. Simulating different possible price paths helps us evaluate the value of the contract. A common model for stock price behavior is Geometric Brownian Motion (GBM), described by the stochastic differential equation:
+
+$$
+dS_t = \mu S_t\,dt + \sigma S_t\,dW_t
+$$
+
+where $\mu$ is the drift (expected return), $\sigma$ is the volatility, and $W_t$ is a standard Brownian motion.
+
+To derive a closed-form solution for $S_t$, we begin by taking the logarithm of the stock price:
+
+$$
+X_t = \log(S_t)
+$$
+
+Since $S_t$ is a stochastic process, we cannot differentiate it using the rules of classical calculus. Instead, we apply Itô’s lemma:
+
+$$
+df(X_t) =  \frac{\partial f}{\partial X_t}dX_t +\frac{1}{2}\frac{\partial^2 f}{\partial X_t^2}dX_t^2
+$$
+
+For a function $f(S_t) = \log(S_t)$, Itô’s lemma gives:
+
+$$
+dX_t = \frac{1}{S_t} dS_t - \frac{1}{2} \frac{1}{S_t^2} (dS_t)^2
+$$
+
+From the SDE of $S_t$, we substitute:
+
+$$
+dS_t = \mu S_t\,dt + \sigma S_t\,dW_t
+$$
+
+Recall that in stochastic calculus:
+
+-   $(dW_t)^2 = dt$
+-   $(dt)^2 = 0$
+-   $dt \cdot dW_t = 0$
+
+Thus,
+
+$$
+(dS_t)^2 = \sigma^2 S_t^2 dt
+$$
+
+Plugging these into the expression for $dX_t$:
+
+$$
+dX_t = \frac{1}{S_t} (\mu S_t\,dt + \sigma S_t\,dW_t) - \frac{1}{2} \cdot \frac{1}{S_t^2} (\sigma^2 S_t^2 dt)
+$$
+
+Simplifying:
+
+$$
+dX_t = (\mu - \frac{1}{2} \sigma^2) dt + \sigma dW_t
+$$
+
+Now, we integrate both sides from $0$ to $t$:
+
+$$
+\int_0^t dX_s = \int_0^t (\mu - \frac{1}{2} \sigma^2) ds + \int_0^t \sigma dW_s
+$$
+
+This gives:
+
+$$
+X_t - X_0 = (\mu - \frac{1}{2} \sigma^2)t + \sigma W_t
+$$
+
+Substituting back $X_t = \log(S_t)$ and $X_0 = \log(S_0)$:
+
+$$
+\log\left( \frac{S_t}{S_0} \right) = (\mu - \frac{1}{2} \sigma^2)t + \sigma W_t
+$$
+
+Exponentiating both sides and solving for $S_t$:
+
+$$
+S_t = S_0 \exp\left( \left( \mu - \frac{1}{2} \sigma^2 \right)t + \sigma W_t \right)
+$$
+
+This closed-form solution shows that the logarithm of the stock price is normally distributed. Therefore, $S_t$ is log-normally distributed, a key result used in the Black-Scholes framework and Monte Carlo simulation of option prices.
+
+Our standard Brownian motion $W_t$ is normally distributed with mean 0 and variance $t$, so the increments $dW_t$ over small time steps $dt$ are distributed as:
+
+$$
+dW_t \sim \mathcal{N}(0, dt)
+$$
+
+Therefore, in our Monte Carlo simulation, we approximate $dW_t$ by generating $n$ random draws from a normal distribution with mean 0 and standard deviation $\sqrt{dt}$ at each time step. These samples are then used to simulate stock price paths based on the closed-form GBM solution we derived.
+
+Below is a plot of 100 simulated stock price paths using the geometric Brownian motion model. The simulation assumes an initial stock price of $100$, an annual drift of $0.04$, volatility of $0.20$, and spans one year divided into $365$ daily time steps, from time $t = 0$ to $t = 1$.
+
+```{r, echo=FALSE}
+# American Put Example
+
+# Function for creating stock price tree using geometric Brownian motion
+stock_matrix = function(S0, vol, mu, time_steps, t, trials){
+  
+  # Variance of our Brownian motion
+  dt = t / time_steps
+  
+  # Time sequence
+  tau = matrix(seq(0, t, length.out = time_steps + 1), nrow = trials, 
+               ncol = time_steps + 1, byrow = TRUE)
+  
+  # Simulate Brownian increments: n paths × t time steps
+  dw = rnorm(trials * time_steps, mean = 0, sd = sqrt(dt))
+  dW = matrix(dw, nrow = trials, ncol = time_steps)
+  
+  # Cumulative Brownian motion
+  W = t(apply(dW, 1, cumsum))
+  W = cbind(0, W)  # Add W_0 = 0 at time 0
+  
+  # GBM simulation
+  St_mat <- S0 * exp((mu - 0.5 * vol^2) * tau + vol * W)
+  
+  return(St_mat)
+}
+```
+
+```{r, echo=FALSE, fig.align='center'}
+st = stock_matrix(100, .2, .04, 365, 1, 100)
+matplot(t(st), type = "l", lty = 1, col = rainbow(nrow(st)),
+        xlab = "Time Steps", ylab = "Stock Price", main = "GBM Paths")
+```
+
+## Valuation Methodology: Least Squares Monte Carlo
+
+In finance, the general method for valuing assets is by discounting future cash flows to the present using the risk-free rate, $r$. This follows the principle of the time value of money, which states that a dollar today is worth more than a dollar received in the future due to opportunity cost. The simplest form of present value is:
+
+$$
+\text{Present Value} = \frac{1}{(1 + r)^t} \times \text{Future Value}_t
+$$
+
+The risk-free rate serves as a standard benchmark because it represents an objective opportunity cost, being free of risk. In the context of option pricing, the future cash flows arise from the payoff function when the option is exercised.
+
+Given the stock price paths simulated using geometric Brownian motion (GBM) over a discrete time grid, we can now begin the valuation process. Like many dynamic programming methods, the Least Squares Monte Carlo (LSMC) algorithm proceeds backward in time, starting from the terminal time $T$ and moving toward the present $t = 0$.
+
+At time $T$, the option holder exercises the option if it is in the money (i.e., the payoff is positive), as no further value can be realized past expiration. We record the payoff at this point for each simulation.
+
+We then step backward to time $T - 1$. For all in-the-money paths at this step, the holder must decide whether to exercise now or continue holding the option. Out-of-the-money paths are excluded since exercising yields no value, and the rational choice is to wait.
+
+The value of exercising is known via the payoff function. However, the continuation value, the expected value of future payoffs, is unknown and must be estimated. Under the assumption of a constant risk-free rate and using the risk-neutral measure $\mathbb{Q}$ (this is a very technical topic that requires a separate treatment), Longstaff and Schwartz (2001) write the continuation value at time $t_k$ as:
+
+$$
+\mathbb{E}_{\mathbb{Q}} \left[ \sum_{k+1}^{K} e^{-rt} c(\omega, t_{k+1}; t_k, T) \mid \mathbb{F}_t \right]
+$$
+
+where $c(\omega, t_{k+1}; t_k, T)$ denotes future cash flows and $\mathbb{F}_t$ is the information available at time $t_k$.
+
+To estimate this conditional expectation, we apply least squares regression. The response variable $Y$ is the discounted payoff from time $T$, and the predictor $X$ is the current stock price at time $T - 1$. Only in-the-money paths are included. We use basis functions of the form $X$ and $X^2$ to approximate the continuation value:
+
+$$
+\hat{Y} = \beta_0 + \beta_1 X + \beta_2 X^2
+$$
+
+With an estimate of the continuation value for each path, we compare it to the exercise value. If the continuation value exceeds the exercise value, it is optimal to continue holding, and we record a value of zero. Otherwise, we exercise and record the exercise value as the cash flow for that path.
+
+This process repeats recursively at each time step, moving backward until $t = 1$. At the end of the recursion, each path will have at most one non-zero cash flow, the point at which it was optimal to exercise.
+
+To finalize the valuation, we discount each realized cash flow back to the present and compute the average across all paths. This gives our estimate of the option's fair value.
+
+```{r, echo=FALSE}
+# Function valuing the option
+value_option = function(S0, rf, vol, mu, time_steps, t, trials, strike){
+  
+  # Getting our stock data and getting rid of t = 0
+  st = stock_matrix(S0, vol, mu, time_steps, t, trials)
+  st = st[, c(-1)]
+  
+  # Getting dt
+  dt = t / time_steps
+  
+  # Evaluating exercise at terminal time
+  for (i in 1:nrow(st)){
+    st[i, ncol(st)] = max(0, strike - st[i, ncol(st)])  
+  }
+  
+  # Working recursively from second to last column to t = 1
+  for (h in (ncol(st) - 1):1){
+    
+    # Initializing matrix to evaluate early exercise and continuation
+    mat = matrix(nrow = trials, ncol = 2)
+    # Looping through each trial/path 
+    for (i in 1:nrow(st)){
+      # Checking for in the money-ness
+      if (strike - st[i, h] >= 0){
+        # if so, set first column to stock price
+        mat[i, 2] = st[i, h]
+        # Then, check for positive future cash flow (for continuation value)
+        future = which(st[i, (h + 1):ncol(st)] > 0)
+        # Checking if positive value exists (could be empty)
+        if (length(future) > 0){
+          # If exists, find index of future cash flow
+          k = h + future[1]
+          # Then, discount cash flow and set equal to first column
+          mat[i, 1] = st[i, k] * exp(-rf * future[1] * dt)
+        }else{mat[i, 1] = 0} # If no future cash flow exist, set to 0
+      }
+    }
+    
+    # Performing regression Y ~ X + X^2 to find continuation value
+    coef = coef(lm(mat[, 1] ~ mat[,2] + I(mat[, 2]^2)))
+    # Finding fitted values
+    mat[, 1] = coef[1] + coef[2]*mat[, 2] + coef[3]*mat[, 2]^2
+    # Evaluating early exercise value to make comparison with continuation value
+    mat[, 2] = strike - mat[, 2]
+    
+    # Looping through trials/paths to find whether to exercise or not
+    for (i in 1:nrow(mat)){
+      # Because not all paths will be in-the-money, check for the ones that are
+      if (!is.na(mat[i, 1])){
+        # Evaluating whether to exercise or continue
+        if (mat[i, 2] > mat[i, 1]){
+          # If exercise, set stock matrix to cash flow (pay-off) of exercising
+          st[i, h] = mat[i, 2]
+          # Set future time steps = 0 because once exercised the option is dead
+          st[i, (h+1):ncol(st)] = 0
+        }else{st[i, h] = 0} # If continuation is greater, set = 0
+      }else{st[i, h] = 0} # If NA, set to 0
+    }
+  }
+  
+  # Initializing vector to store final discounted cash flows
+  results = rep(NA, trials)
+  # Looping to find and discount cash flows
+  for (i in 1:nrow(st)){
+    # Finding index of positive future cash flow
+    future = which(st[i, ] > 0)
+    # Checking if not empty (path could have no cash flow)
+    if (length(future) > 0){
+      # Discount cash flow to present and store in results vector
+      results[i] = st[i, future[1]] * exp(-rf * future[1] * dt)
+    }else{results[i] = 0} # If no future cash flow exists set = 0
+  }
+  # Find option price by take mean across simulations
+  option_price = mean(results)
+  
+  return(option_price)
+}
+```
+
+The following plot displays the previously simulated GBM paths, with regions indicating when the option is exercised under a strike price of 110.
+
+```{r, echo=FALSE, fig.align='center'}
+matplot(t(st), type = "l", lty = 1, col = rainbow(nrow(st)),
+        xlab = "Time Steps", ylab = "Stock Price", 
+        main = "GBM Paths with Highlighted Exercise Region")
+abline(h = 110)
+rect(xleft = 0, xright = ncol(st),
+     ybottom = 0, ytop = 110,
+     col = rgb(1, 0, 0, alpha = 0.1), border = NA)
+```
+
+## Evaluating Performance
+
+We evaluate the performance of our option pricer by running it under different trial counts: 100, 1,000, 100,000, and 1,000,000 simulations. For each configuration, we repeat the pricing procedure 50 times to assess the variability and convergence behavior of the estimator.
+
+Due to computational limitations, we restrict the model to a short time horizon of 3 units, discretized into 3 time steps. The simulation assumes an initial stock price of 100, a strike price of 110, volatility of 0.2, and a drift and risk-free rate of 0.04.
+
+The results of this experiment are summarized in the plots below.
+
+```{r, echo=FALSE, eval=FALSE}
+# Testing convergence
+
+# Different trial counts we want to test
+trials = c(100, 1000, 10000, 100000, 1000000)
+
+# Initializing vectors to store means and standard deviations of samples
+sds = rep(NA, length(trials))
+means = rep(NA, length(trials))
+
+# Generating 50 samples for each trial count
+for (j in 1:length(trials)){
+  # Setting index i equal to subsequent trial counts
+  i = trials[j]
+  # Vector to store sample
+  values = rep(NA, 50)
+  # Generating samples
+  for (h in 1:50){
+    values[h] = value_option(100, .04, .2, .04, 3, 3, i, 110)
+  }
+  # Evaluating mean and standard deviation of sample
+  means[j] = mean(values)
+  sds[j] = sd(values)
+}
+```
+
+```{r, echo=FALSE, fig.align='center'}
+# Setting up plotting area
+layout(matrix(c(1, 2, 3, 3), nrow = 2, byrow = TRUE))
+par(mar = c(4, 4, 2, 1))
+
+# Loading in simulation results and variables for speed
+load("simulated_results.RData")
+trials = c(100, 1000, 10000, 100000, 1000000)
+
+# Standard error plot
+plot(trials, sds, log = "x", type = "b", col = "blue",
+     xlab = "Number of Trials", ylab = "Standard Error",
+     main = "Convergence of SE")
+
+# Mean plot
+plot(trials, means, type = "b", log = "x",
+     xlab = "Number of Trials", ylab = "Estimated Price",
+     main = "Convergence of Estimate")
+abline(h = means[length(means)], col = "red", lty = 2)  # true value approximation
+
+# Number of independent MC estimates per trial count and 95% CI critical value
+runs = 50  
+z = 1.96  
+
+# Evaluating our upper and lower bounds
+upper = means + z * sds / sqrt(runs)
+lower = means - z * sds / sqrt(runs)
+
+# Plot with 95% confidence bands
+plot(trials, means, type = "b", log = "x",
+     ylim = range(lower, upper),
+     xlab = "Number of Trials",
+     ylab = "Estimated Price",
+     main = "95% Confidence Intervals Around Mean Estimate")
+arrows(trials, lower, trials, upper,
+       angle = 90, code = 3, length = 0.05, col = "magenta")
+```
+
+The algorithm converges closely to the true option value with as few as 1,000 trials. Notably, the largest drop in standard error occurs between 100 and 1,000 trials, after which further improvements begin to plateau. This suggests that using between 1,000 and 10,000 trials is sufficient to achieve both accuracy and computational efficiency.
+
+As a sanity check, we compare our American option valuation with that of European option pricers using two approaches: the closed-form Black-Scholes model and a standard Monte Carlo simulation. This allows us to benchmark our results against known solutions for similar settings.
+
+The Black-Scholes model for European puts takes on the form:
+
+$$
+P = K e^{-rT} \Phi(-d_2) - S_0 \Phi(-d_1)
+$$
+
+$$
+d_1 = \frac{\ln\left(\frac{S_0}{K}\right) + \left(r + \frac{\sigma^2}{2}\right)T}{\sigma \sqrt{T}}, \quad
+d_2 = d_1 - \sigma \sqrt{T}
+$$
+
+Where:\
+- $P$ is the price of the European put option\
+- $S_0$ is the current stock price\
+- $K$ is the strike price\
+- $r$ is the risk-free interest rate\
+- $T$ is the time to maturity\
+- $\sigma$ is the volatility of the underlying asset\
+- $\Phi$ is the cumulative distribution function of the standard normal distribution
+
+For the Monte Carlo simulation of European puts, we simulate GBM with the following form:
+
+$$
+S_T = S_0 \cdot \exp\left[\left(r - \frac{1}{2}\sigma^2\right)T + \sigma Z \sqrt{T}\right]
+$$
+
+The main difference between this and our earlier derivation is that $W_T = Z\sqrt{T}$, where $Z \sim \mathcal{N}(0, 1)$ and $\mu = r$. We know from classical statistics, any normally distributed variable $X \sim \mathcal{N}(\mu, \sigma^2)$ can be expressed as a linear transformation of a standard normal variable $Z \sim \mathcal{N}(0,1)$ via the identity:
+
+$$
+X = \mu + \sigma Z
+$$
+
+In our case, we know that $W_T \sim \mathcal{N}(0, T)$, so we can write $W_T = \sqrt{T} Z$ since the mean of $W_T$ is 0. This substitution is crucial in our Monte Carlo simulation because we only simulate the terminal point of the Brownian path, not the full trajectory. 
+Additionally, we set the drift in our GBM model to the risk-free rate $r$, transforming the dynamics to the risk-neutral measure using Girsanov’s theorem, a standard technique that ensures our simulated prices fairly reflect arbitrage-free values under the Black-Scholes framework. To complete the method, we evaluate the payoff for each simulated path, discount the resulting cash flows to the present, and take the average to estimate the option price.
+
+This comparison is based on options with the following specifications: an initial price of 100, a risk-free rate and drift of 0.04, volatility of 0.2, a strike of 110, and a time to maturity of $T = 1$. Each Monte Carlo pricer used 1,000 simulations, as we previously showed this number is sufficient for convergence. For the American option pricer, we used 365 time steps between $t = 0$ and $T$ to closely approximate a continuous-time solution. We also set the drift equal to the risk-free rate to ensure pricing under the risk-neutral measure, consistent with the assumptions of both the Black-Scholes model and the European Monte Carlo method. This adjustment ensures that all three pricing methods are compared on a fair and equivalent basis.
+
+```{r, echo=FALSE}
+# Black Scholes model
+
+BSM_put = function(S0, rf, vol, t, strike){
+  d1 = (log(S0/strike) + (rf + (vol^2)/2) * t) / (vol * sqrt(t))
+  d2 = d1 - (vol * sqrt(t))
+  price = -pnorm(-d1) * S0 + pnorm(-d2) * strike * exp(-rf * t)
+  return(price)
+}
+
+# Monte Carlo European Pricer
+MC_EuroPut = function(S0, rf, vol, t, strike, trials){
+  # Generating random component
+  Z = rnorm(trials)
+  # Evaluating GBM for terminal stock price
+  st = S0 * exp((rf - .5 * vol^2) * t + vol * sqrt(t) * Z)
+  # Evaluating put pay off function
+  payoffs = pmax(0, strike - st)
+  # Taking mean of simulations as estimate and discounting to present
+  put_price = mean(payoffs) * exp(-rf * t)
+  return(put_price)
+}
+
+Am = value_option(100, .04, .2, .04, 365, 1, 1000, 110)
+BSM = BSM_put(100, .04, .2, 1, 110)
+MC = MC_EuroPut(100, .04, .2, 1, 110, 1000)
+```
+
+| Method                        | Price |
+|-------------------------------|-------|
+| Monte Carlo (European Put)    | 11.43 |
+| Black-Scholes (European Put)  | 11.35 |
+| Monte Carlo (American Put)    | 12.18 |
+
+As expected, the American option pricer produces a higher price than its European counterparts. This outcome reinforces our confidence in the method's validity, as the added flexibility of early exercise in American options should result in a premium over European options.
+
+## Conclusion
+
+The Least Squares Monte Carlo (LSMC) method provides a theoretically sound and computationally efficient solution to the optimal stopping problem inherent in pricing American-style options. By enabling a practical estimation of continuation values, this approach offers a robust framework for fair valuation, benefiting investors, issuers, and market participants alike.
+
+Future research could explore extensions of this methodology to other financial instruments with embedded optionality. Enhancing the regression step by experimenting with alternative models, basis functions, or covariates may improve the accuracy of continuation value estimates. Additionally, incorporating stochastic volatility or interest rate dynamics would better reflect real-world market conditions, where these parameters are rarely constant. Lastly, comparing the LSMC method with finite difference and binomial or trinomial tree models, other popular methods for pricing American options, could offer further validation and insight into its relative strengths and weaknesses.
+
+## References
+
+Longstaff, F. A., & Schwartz, E. S. (2001). Valuing American options by simulation: A simple least-squares approach. The Review of Financial Studies, 14(1), 113–147. https://doi.org/10.1093/rfs/14.1.113
